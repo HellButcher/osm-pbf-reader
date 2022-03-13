@@ -30,11 +30,11 @@ impl<'l> Node<'l> {
     #[inline]
     pub(super) fn from_pbf(n: &'l PbfNode, offset: &super::Offset, strings: &'l [String]) -> Self {
         Self {
-            id: NodeId(n.id()),
-            nano_lat: offset.lat + n.lat() * offset.granularity as i64,
-            nano_lon: offset.lon + n.lon() * offset.granularity as i64,
+            id: NodeId(n.id),
+            nano_lat: offset.lat + n.lat * offset.granularity as i64,
+            nano_lon: offset.lon + n.lon * offset.granularity as i64,
             tags: Tags::new(strings, &n.keys, &n.vals),
-            meta: Meta::from_info(&n.info),
+            meta: n.info.as_ref().map(Meta::from_info).unwrap_or_default(),
         }
     }
 

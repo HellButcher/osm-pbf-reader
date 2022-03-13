@@ -10,7 +10,7 @@ impl ChangeSet {
     #[inline]
     pub(crate) fn from_pbf(n: &PbfChangeSet) -> Self {
         ChangeSet {
-            id: ChangeSetId(n.id()),
+            id: ChangeSetId(n.id),
         }
     }
 }

@@ -9,7 +9,7 @@ pub enum Error {
     IoError(#[from] std::io::Error),
 
     #[error(transparent)]
-    ProtobufError(#[from] osm_pbf_proto::protobuf::Error),
+    DecodeError(#[from] osm_pbf_proto::prost::DecodeError),
 
     #[error(transparent)]
     Utf8Error(#[from] FromUtf8Error),

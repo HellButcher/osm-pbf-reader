@@ -83,7 +83,7 @@ impl<'l> Iterator for Primitives<'l> {
                     return Some(Primitive::Node(n));
                 }
             } else if self.filter.contains(PrimitiveType::NODE) && group.dense.is_some() {
-                let dense = group.dense.get_ref();
+                let dense = group.dense.as_ref().unwrap();
                 let prim_pos = self.prim_pos;
                 if let (Some(id), Some(lat), Some(lon)) = (
                     dense.id.get(prim_pos).copied(),

@@ -26,9 +26,9 @@ impl<'l> Relation<'l> {
     #[inline]
     pub(crate) fn from_pbf(r: &'l PbfRelation, strings: &'l [String]) -> Self {
         Self {
-            id: RelationId(r.id()),
+            id: RelationId(r.id),
             tags: Tags::new(strings, &r.keys, &r.vals),
-            meta: Meta::from_info(&r.info),
+            meta: r.info.as_ref().map(Meta::from_info).unwrap_or_default(),
         }
     }
 

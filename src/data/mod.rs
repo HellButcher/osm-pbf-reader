@@ -21,16 +21,8 @@ pub struct Meta {
 impl Meta {
     fn from_info(info: &PbfInfo) -> Self {
         Self {
-            version: if info.has_version() {
-                info.version() as u32
-            } else {
-                0
-            },
-            visible: if info.has_visible() {
-                info.visible()
-            } else {
-                true
-            },
+            version: info.version.unwrap_or(0) as u32,
+            visible: info.visible.unwrap_or(true),
         }
     }
 }
@@ -71,20 +63,16 @@ impl Block for PrimitiveBlock {
     type Message = PbfPrimitiveBlock;
 
     #[inline]
-    fn from_message(mut pbf: PbfPrimitiveBlock) -> Result<Self> {
-        let strings = if let Some(st) = pbf.stringtable.take() {
-            st.s.into_iter()
+    fn from_message(pbf: PbfPrimitiveBlock) -> Result<Self> {
+        let strings = pbf.stringtable.s.into_iter()
                 .map(String::from_utf8)
-                .collect::<Result<Vec<String>, FromUtf8Error>>()?
-        } else {
-            Vec::new()
-        };
+                .collect::<Result<Vec<String>, FromUtf8Error>>()?;
         Ok(Self {
             strings,
             offset: Offset {
-                lat: pbf.lat_offset(),
-                lon: pbf.lon_offset(),
-                granularity: pbf.granularity(),
+                lat: pbf.lat_offset.unwrap_or(0),
+                lon: pbf.lon_offset.unwrap_or(0),
+                granularity: pbf.granularity.unwrap_or(100),
             },
             primitive_groups: pbf.primitivegroup,
         })

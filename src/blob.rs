@@ -1,7 +1,9 @@
 use byteorder::{BigEndian, ReadBytesExt};
+use osm_pbf_proto::fileformat::blob::Data;
 pub use osm_pbf_proto::fileformat::{Blob as PbfBlob, BlobHeader as PbfBlobHeader};
-use osm_pbf_proto::protobuf::{CodedInputStream, Message};
-use std::io::{self, BufRead, Read};
+use osm_pbf_proto::prost::Message;
+use osm_pbf_proto::prost::bytes::Buf;
+use std::io::{self, Read};
 use std::iter;
 use std::marker::PhantomData;
 use std::ops::Deref;
@@ -32,40 +34,12 @@ impl<M> Blob<M> {
 }
 
 pub trait Block: Sized {
-    type Message: Message;
+    type Message: Message + Default;
 
     fn from_message(pbf: Self::Message) -> Result<Self>;
 
-    #[inline]
-    fn parse_from_reader(reader: &mut dyn Read) -> Result<Self> {
-        let mut is = CodedInputStream::new(reader);
-        let msg = Self::Message::parse_from(&mut is)?;
-        is.check_eof()?;
-        let block = Self::from_message(msg)?;
-        Ok(block)
-    }
-
-    #[inline]
-    fn parse_from_buffered_reader(reader: &mut dyn BufRead) -> Result<Self> {
-        let mut is = CodedInputStream::from_buffered_reader(reader);
-        let msg = Self::Message::parse_from(&mut is)?;
-        is.check_eof()?;
-        let block = Self::from_message(msg)?;
-        Ok(block)
-    }
-
-    #[inline]
-    fn parse_from_bytes(bytes: &[u8]) -> Result<Self> {
-        let mut is = CodedInputStream::from_bytes(bytes);
-        let msg = Self::Message::parse_from(&mut is)?;
-        is.check_eof()?;
-        let block = Self::from_message(msg)?;
-        Ok(block)
-    }
-
-    #[inline]
-    fn parse_from(is: &mut CodedInputStream) -> Result<Self> {
-        let msg = Self::Message::parse_from(is)?;
+    fn decode(buf: impl Buf) -> Result<Self> {
+        let msg = Self::Message::decode(buf)?;
         let block = Self::from_message(msg)?;
         Ok(block)
     }
@@ -73,18 +47,25 @@ pub trait Block: Sized {
 
 impl<M: Block> Blob<M> {
     pub fn decode(&self) -> Result<M> {
-        if self.blob.has_raw() {
-            Ok(M::parse_from_bytes(self.blob.raw())?)
-        } else if cfg!(feature = "zlib") && self.blob.has_zlib_data() {
-            let cursor = io::Cursor::new(self.blob.zlib_data());
-            let mut decoder = flate2::bufread::ZlibDecoder::new(cursor);
-            Ok(M::parse_from_reader(&mut decoder)?)
-        } else if cfg!(feature = "lzma") && self.blob.has_lzma_data() {
-            let cursor = io::Cursor::new(self.blob.lzma_data());
-            let mut decoder = xz2::bufread::XzDecoder::new(cursor);
-            Ok(M::parse_from_reader(&mut decoder)?)
-        } else {
-            Err(Error::UnsupportedEncoding)
+        match &self.blob.data {
+            Some(Data::Raw(bytes)) => Ok(M::decode(bytes.as_slice())?),
+            Some(Data::ZlibData(bytes)) if cfg!(feature = "zlib") => {
+                let raw_size = (self.blob.raw_size.unwrap_or_default() as usize).max(bytes.len());
+                let cursor = io::Cursor::new(bytes);
+                let mut decoder = flate2::bufread::ZlibDecoder::new(cursor);
+                let mut bytes = Vec::with_capacity(raw_size);
+                decoder.read_to_end(&mut bytes)?;
+                Ok(M::decode(bytes.as_slice())?)
+            },
+            Some(Data::LzmaData(bytes)) if cfg!(feature = "lzma") => {
+                let raw_size = (self.blob.raw_size.unwrap_or_default() as usize).max(bytes.len());
+                let cursor = io::Cursor::new(bytes);
+                let mut decoder = xz2::bufread::XzDecoder::new(cursor);
+                let mut bytes = Vec::with_capacity(raw_size);
+                decoder.read_to_end(&mut bytes)?;
+                Ok(M::decode(bytes.as_slice())?)
+            },
+            _ => Err(Error::UnsupportedEncoding),
         }
     }
 }
@@ -155,19 +136,21 @@ impl<R: io::BufRead> Blobs<R> {
 
     pub fn header(&mut self) -> Result<OSMHeaderBlob> {
         match self.next_blob()? {
-            Some((header, blob)) if header.field_type() == "OSMHeader" => {
+            Some((header, blob)) if header.r#type == "OSMHeader" => {
                 Ok(OSMHeaderBlob::new(header, blob))
             }
-            Some((header, _)) => Err(Error::UnexpectedBlobType(header.field_type().to_string())),
+            Some((header, _)) => Err(Error::UnexpectedBlobType(header.r#type)),
             None => Err(std::io::ErrorKind::UnexpectedEof.into()),
         }
     }
 
-    fn read_msg_exact<M: Message>(&mut self, exact_size: usize) -> Result<M> {
-        let mut input = self.0.by_ref().take(exact_size as u64);
-        let mut input = CodedInputStream::from_buffered_reader(&mut input);
-        let msg = M::parse_from_reader(&mut input)?;
-        input.check_eof()?;
+    fn read_msg_exact<M: Message + Default>(&mut self, exact_size: usize) -> Result<M> {
+        let mut bytes = Vec::with_capacity(exact_size);
+        let len = self.0.by_ref().take(exact_size as u64).read_to_end(&mut bytes)?;
+        if len != exact_size {
+            return Err(io::ErrorKind::UnexpectedEof.into());
+        }
+        let msg = M::decode(bytes.as_slice())?;
         Ok(msg)
     }
 
@@ -182,9 +165,9 @@ impl<R: io::BufRead> Blobs<R> {
             }
             Ok(header_size) => header_size as usize,
         };
-
+        
         let header: PbfBlobHeader = self.read_msg_exact(header_size)?;
-        let data_size = header.datasize() as usize;
+        let data_size = header.datasize as usize;
         if data_size > MAX_UNCOMPRESSED_DATA_SIZE {
             return Err(Error::BlobDataToLarge);
         }
@@ -206,7 +189,7 @@ impl<R: io::BufRead> iter::Iterator for Blobs<R> {
                 Ok(None) => {
                     return None;
                 }
-                Ok(Some((header, blob))) if header.field_type() == "OSMData" => {
+                Ok(Some((header, blob))) if header.r#type == "OSMData" => {
                     return Some(Ok(OSMDataBlob::new(header, blob)));
                 }
                 // skip unsupported blobs and header-blobs
