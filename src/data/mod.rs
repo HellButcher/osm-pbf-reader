@@ -1,8 +1,9 @@
-use std::string::FromUtf8Error;
+use std::{borrow::Cow, str::Utf8Error};
 
 use crate::{blob::Block, error::Result};
 
 pub use osm_pbf_proto::osmformat::{Info as PbfInfo, PrimitiveBlock as PbfPrimitiveBlock};
+use osm_pbf_proto::quick_protobuf::{BytesReader, MessageRead};
 
 pub mod changeset;
 pub mod node;
@@ -21,7 +22,11 @@ pub struct Meta {
 impl Meta {
     fn from_info(info: &PbfInfo) -> Self {
         Self {
-            version: info.version.unwrap_or(0) as u32,
+            version: if info.version == -1 {
+                0
+            } else {
+                info.version as u32
+            },
             visible: info.visible.unwrap_or(true),
         }
     }
@@ -59,23 +64,39 @@ pub struct PrimitiveBlock {
     offset: Offset,
 }
 
-impl Block for PrimitiveBlock {
-    type Message = PbfPrimitiveBlock;
+fn from_utf8(bytes: Cow<'_, [u8]>) -> Result<String, Utf8Error> {
+    match bytes {
+        Cow::Owned(vec) => Ok(String::from_utf8(vec).map_err(|e| e.utf8_error())?),
+        Cow::Borrowed(slice) => Ok(std::str::from_utf8(slice)?.to_owned()),
+    }
+}
 
+impl PrimitiveBlock {
     #[inline]
-    fn from_message(pbf: PbfPrimitiveBlock) -> Result<Self> {
-        let strings = pbf.stringtable.s.into_iter()
-                .map(String::from_utf8)
-                .collect::<Result<Vec<String>, FromUtf8Error>>()?;
+    fn from_message(pbf: PbfPrimitiveBlock<'_>) -> Result<Self> {
+        let strings = pbf
+            .stringtable
+            .s
+            .into_iter()
+            .map(from_utf8)
+            .collect::<Result<Vec<String>, Utf8Error>>()?;
         Ok(Self {
             strings,
             offset: Offset {
-                lat: pbf.lat_offset.unwrap_or(0),
-                lon: pbf.lon_offset.unwrap_or(0),
-                granularity: pbf.granularity.unwrap_or(100),
+                lat: pbf.lat_offset,
+                lon: pbf.lon_offset,
+                granularity: pbf.granularity,
             },
             primitive_groups: pbf.primitivegroup,
         })
+    }
+}
+
+impl Block for PrimitiveBlock {
+    #[inline]
+    fn read_from_bytes(bytes: &[u8]) -> Result<Self> {
+        let msg = PbfPrimitiveBlock::from_reader(&mut BytesReader::from_bytes(bytes), bytes)?;
+        Self::from_message(msg)
     }
 }
 

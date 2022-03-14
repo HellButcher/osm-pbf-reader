@@ -1,4 +1,4 @@
-use std::string::FromUtf8Error;
+use std::str::Utf8Error;
 
 use thiserror::Error;
 
@@ -9,10 +9,10 @@ pub enum Error {
     IoError(#[from] std::io::Error),
 
     #[error(transparent)]
-    DecodeError(#[from] osm_pbf_proto::prost::DecodeError),
+    DecodeError(#[from] osm_pbf_proto::quick_protobuf::Error),
 
     #[error(transparent)]
-    Utf8Error(#[from] FromUtf8Error),
+    Utf8Error(#[from] Utf8Error),
 
     // The length of the BlobHeader [..] must be less than 64 KiB.
     // https://wiki.openstreetmap.org/wiki/PBF_Format
@@ -23,7 +23,7 @@ pub enum Error {
     // https://wiki.openstreetmap.org/wiki/PBF_Format
     #[error("Invalid Format: The size of the `Blob` is to large")]
     BlobDataToLarge,
-    
+
     #[error("The encoding of the Blob is not supported")]
     UnsupportedEncoding,
 
