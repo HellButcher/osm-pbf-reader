@@ -23,7 +23,7 @@ pub enum Error {
     // https://wiki.openstreetmap.org/wiki/PBF_Format
     #[error("Invalid Format: The size of the `Blob` is to large")]
     BlobDataToLarge,
-    
+
     #[error("The encoding of the Blob is not supported")]
     UnsupportedEncoding,
 
