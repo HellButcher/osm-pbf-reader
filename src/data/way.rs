@@ -1,17 +1,24 @@
-use std::{array::IntoIter, iter::FusedIterator, ops::Deref};
+use std::{iter::FusedIterator, ops::Deref};
 
 pub use osm_pbf_proto::osmformat::Way as PbfWay;
 
-use super::{node::NodeId, tags::Tags, Meta};
+use super::{
+    node::NodeId,
+    tags::{TagFields, Tags},
+    Meta,
+};
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct WayId(pub i64);
 
 pub struct Way<'l> {
     pub id: WayId,
+
+    strings: &'l [String],
+
     refs: &'l [i64],
 
-    tags: Tags<'l>,
+    tags: TagFields<'l>,
     meta: Meta,
 }
 
@@ -28,8 +35,9 @@ impl<'l> Way<'l> {
     pub(crate) fn from_pbf(w: &'l PbfWay, strings: &'l [String]) -> Self {
         Self {
             id: WayId(w.id()),
+            strings,
             refs: &w.refs,
-            tags: Tags::new(strings, &w.keys, &w.vals),
+            tags: TagFields(&w.keys, &w.vals),
             meta: Meta::from_info(&w.info),
         }
     }
@@ -44,7 +52,7 @@ impl<'l> Way<'l> {
 
     #[inline]
     pub fn tags(&self) -> Tags<'l> {
-        self.tags
+        self.tags.iter_with_strings(self.strings)
     }
 }
 

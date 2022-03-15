@@ -1,60 +1,65 @@
+use std::slice::Iter;
 use std::{iter::FusedIterator, ops::Deref};
 
 #[derive(Copy, Clone)]
-enum TagLayout<'l> {
+pub(super) struct TagFields<'l>(pub &'l [u32], pub &'l [u32]);
+
+#[derive(Copy, Clone)]
+pub(super) enum NodeTagFields<'l> {
     Normal(&'l [u32], &'l [u32]),
     Dense(&'l [i32]),
 }
 
-#[derive(Copy, Clone)]
-pub struct Tags<'l> {
-    strings: &'l [String],
-    tags: TagLayout<'l>,
+#[derive(Clone)]
+enum TagIterFields<'l> {
+    Normal(Iter<'l, u32>, Iter<'l, u32>),
+    Dense(Iter<'l, i32>),
 }
 
-impl<'l> Tags<'l> {
-    #[inline(always)]
-    pub(crate) fn new(strings: &'l [String], keys: &'l [u32], values: &'l [u32]) -> Tags<'l> {
+pub struct Tags<'l> {
+    strings: &'l [String],
+    iters: TagIterFields<'l>,
+}
+
+impl<'l> TagFields<'l> {
+    #[inline]
+    pub fn iter_with_strings(self, strings: &'l [String]) -> Tags<'l> {
         Tags {
             strings,
-            tags: TagLayout::Normal(keys, values),
+            iters: TagIterFields::Normal(self.0.iter(), self.1.iter()),
         }
     }
+}
 
-    #[inline(always)]
-    pub(crate) fn new_dense(strings: &'l [String], key_values: &'l [i32]) -> Tags<'l> {
+impl<'l> NodeTagFields<'l> {
+    #[inline]
+    pub fn iter_with_strings(self, strings: &'l [String]) -> Tags<'l> {
         Tags {
             strings,
-            tags: TagLayout::Dense(key_values),
+            iters: match self {
+                NodeTagFields::Normal(keys, values) => {
+                    TagIterFields::Normal(keys.iter(), values.iter())
+                }
+                NodeTagFields::Dense(key_values) => TagIterFields::Dense(key_values.iter()),
+            },
         }
     }
+}
 
+impl<'l> Iterator for Tags<'l> {
+    type Item = (&'l str, &'l str);
     #[inline]
-    pub fn len(&self) -> usize {
-        match self.tags {
-            TagLayout::Normal(keys, values) => keys.len().min(values.len()),
-            TagLayout::Dense(key_values) => key_values.len() / 2,
-        }
-    }
-
-    #[inline]
-    pub fn is_empty(&self) -> bool {
-        self.len() == 0
-    }
-
-    #[inline]
-    pub fn get(&self, index: usize) -> Option<(&'l str, &'l str)> {
+    fn next(&mut self) -> Option<Self::Item> {
         let key_index;
         let value_index;
-        match self.tags {
-            TagLayout::Normal(keys, values) => {
-                key_index = keys.get(index).copied()? as usize;
-                value_index = values.get(index).copied()? as usize;
+        match self.iters {
+            TagIterFields::Normal(ref mut keys, ref mut values) => {
+                key_index = keys.next().copied()? as usize;
+                value_index = values.next().copied()? as usize;
             }
-            TagLayout::Dense(key_values) => {
-                let tmp = index / 2;
-                key_index = key_values.get(tmp).copied()? as usize;
-                value_index = key_values.get(tmp + 1).copied()? as usize;
+            TagIterFields::Dense(ref mut key_values) => {
+                key_index = key_values.next().copied()? as usize;
+                value_index = key_values.next().copied()? as usize;
             }
         }
         let key = self.strings.get(key_index).map(Deref::deref).unwrap_or("");
@@ -67,78 +72,21 @@ impl<'l> Tags<'l> {
     }
 
     #[inline]
-    pub fn iter(&self) -> TagsIter<'l> {
-        TagsIter {
-            tags: *self,
-            pos: 0,
-        }
-    }
-}
-
-impl<'l> IntoIterator for Tags<'l> {
-    type Item = (&'l str, &'l str);
-    type IntoIter = TagsIter<'l>;
-    fn into_iter(self) -> TagsIter<'l> {
-        TagsIter { tags: self, pos: 0 }
-    }
-}
-
-impl<'l> IntoIterator for &'_ Tags<'l> {
-    type Item = (&'l str, &'l str);
-    type IntoIter = TagsIter<'l>;
-    fn into_iter(self) -> TagsIter<'l> {
-        TagsIter {
-            tags: *self,
-            pos: 0,
-        }
-    }
-}
-
-pub struct TagsIter<'l> {
-    tags: Tags<'l>,
-    pos: usize,
-}
-
-impl<'l> Deref for TagsIter<'l> {
-    type Target = Tags<'l>;
-    fn deref(&self) -> &Tags<'l> {
-        &self.tags
-    }
-}
-
-impl<'l> Iterator for TagsIter<'l> {
-    type Item = (&'l str, &'l str);
-    #[inline]
-    fn next(&mut self) -> Option<Self::Item> {
-        let r = self.tags.get(self.pos)?;
-        self.pos += 1;
-        Some(r)
-    }
-
-    #[inline]
     fn size_hint(&self) -> (usize, Option<usize>) {
-        let len = self.tags.len() - self.pos;
-        (len, Some(len))
-    }
-
-    #[inline]
-    fn count(self) -> usize {
-        self.tags.len() - self.pos
-    }
-
-    #[inline]
-    fn last(self) -> Option<Self::Item> {
-        let len = self.tags.len();
-        if len > 0 {
-            self.tags.get(len - 1)
-        } else {
-            None
+        match self.iters {
+            TagIterFields::Normal(ref keys, ref values) => {
+                let (keys_lower, keys_upper) = keys.size_hint();
+                let (values_lower, values_upper) = values.size_hint();
+                (
+                    keys_lower.min(values_lower),
+                    keys_upper.zip(values_upper).map(|(k, v)| k.min(v)),
+                )
+            }
+            TagIterFields::Dense(ref key_values) => {
+                let (lower, upper) = key_values.size_hint();
+                (lower / 2, upper.map(|l| l / 2))
+            }
         }
     }
-    #[inline]
-    fn nth(&mut self, n: usize) -> Option<Self::Item> {
-        self.pos += n;
-        self.next()
-    }
 }
-impl<'l> FusedIterator for TagsIter<'l> {}
+impl<'l> FusedIterator for Tags<'l> {}

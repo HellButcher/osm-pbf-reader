@@ -2,7 +2,10 @@ use std::ops::Deref;
 
 pub use osm_pbf_proto::osmformat::{DenseNodes as PbfDenseNodes, Node as PbfNode};
 
-use super::{tags::Tags, DenseState, Meta};
+use super::{
+    tags::{NodeTagFields, Tags},
+    DenseState, Meta,
+};
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct NodeId(pub i64);
@@ -14,7 +17,8 @@ pub struct Node<'l> {
     /// Longitude in nanodegrees
     pub nano_lon: i64,
 
-    tags: Tags<'l>,
+    strings: &'l [String],
+    tags: NodeTagFields<'l>,
     meta: Meta,
 }
 
@@ -31,9 +35,10 @@ impl<'l> Node<'l> {
     pub(super) fn from_pbf(n: &'l PbfNode, offset: &super::Offset, strings: &'l [String]) -> Self {
         Self {
             id: NodeId(n.id()),
+            strings,
             nano_lat: offset.lat + n.lat() * offset.granularity as i64,
             nano_lon: offset.lon + n.lon() * offset.granularity as i64,
-            tags: Tags::new(strings, &n.keys, &n.vals),
+            tags: NodeTagFields::Normal(&n.keys, &n.vals),
             meta: Meta::from_info(&n.info),
         }
     }
@@ -51,7 +56,8 @@ impl<'l> Node<'l> {
             id: NodeId(d.id),
             nano_lat: offset.lat + d.lat * offset.granularity as i64,
             nano_lon: offset.lon + d.lon * offset.granularity as i64,
-            tags: Tags::new_dense(strings, key_values),
+            strings,
+            tags: NodeTagFields::Dense(key_values),
             meta: Meta { version, visible },
         }
     }
@@ -68,6 +74,6 @@ impl<'l> Node<'l> {
     }
 
     pub fn tags(&self) -> Tags<'l> {
-        self.tags
+        self.tags.iter_with_strings(self.strings)
     }
 }
