@@ -1,9 +1,9 @@
 use std::{ops::Deref, slice::Iter};
 
-pub use osm_pbf_proto::osmformat::{
-    relation::MemberType as PbfMemberType, Relation as PbfRelation,
+use osm_pbf_proto::{
+    osmformat::{relation::MemberType as PbfMemberType, Relation as PbfRelation},
+    protobuf::EnumOrUnknown,
 };
-use osm_pbf_proto::protobuf::EnumOrUnknown;
 
 use super::{
     node::NodeId,

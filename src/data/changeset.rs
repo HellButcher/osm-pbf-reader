@@ -1,4 +1,4 @@
-pub use osm_pbf_proto::osmformat::ChangeSet as PbfChangeSet;
+use osm_pbf_proto::osmformat::ChangeSet as PbfChangeSet;
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct ChangeSetId(pub i64);

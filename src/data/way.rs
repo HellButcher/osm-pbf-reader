@@ -1,6 +1,6 @@
 use std::{iter::FusedIterator, ops::Deref};
 
-pub use osm_pbf_proto::osmformat::Way as PbfWay;
+use osm_pbf_proto::osmformat::Way as PbfWay;
 
 use super::{
     node::NodeId,

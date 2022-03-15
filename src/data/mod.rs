@@ -2,7 +2,9 @@ use std::string::FromUtf8Error;
 
 use crate::{blob::Block, error::Result};
 
-pub use osm_pbf_proto::osmformat::{Info as PbfInfo, PrimitiveBlock as PbfPrimitiveBlock};
+use osm_pbf_proto::osmformat::{
+    Info as PbfInfo, PrimitiveBlock as PbfPrimitiveBlock, PrimitiveGroup as PbfPrimitiveGroup,
+};
 
 pub mod changeset;
 pub mod node;
@@ -63,7 +65,7 @@ struct DenseState {
 #[derive(Clone)]
 pub struct PrimitiveBlock {
     strings: Vec<String>,
-    primitive_groups: Vec<primitive::PbfPrimitiveGroup>,
+    primitive_groups: Vec<PbfPrimitiveGroup>,
     offset: Offset,
 }
 

@@ -1,6 +1,6 @@
 use std::ops::Deref;
 
-pub use osm_pbf_proto::osmformat::{DenseNodes as PbfDenseNodes, Node as PbfNode};
+use osm_pbf_proto::osmformat::Node as PbfNode;
 
 use super::{
     tags::{NodeTagFields, Tags},

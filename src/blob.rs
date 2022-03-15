@@ -5,7 +5,6 @@ use std::io::{self, BufRead, Read};
 use std::iter;
 use std::marker::PhantomData;
 use std::ops::Deref;
-use std::str::FromStr;
 
 use crate::data::OSMDataBlob;
 use crate::error::{Error, Result};
@@ -94,24 +93,6 @@ impl<M> Deref for Blob<M> {
     #[inline]
     fn deref(&self) -> &PbfBlobHeader {
         &self.header
-    }
-}
-
-#[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
-pub enum BlobType {
-    OSMHeader,
-    OSMData,
-}
-
-impl FromStr for BlobType {
-    type Err = ();
-    #[inline]
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
-        Ok(match s {
-            "OSMHeader" => Self::OSMHeader,
-            "OSMData" => Self::OSMData,
-            _ => return Err(()),
-        })
     }
 }
 

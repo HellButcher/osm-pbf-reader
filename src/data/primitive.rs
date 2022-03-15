@@ -1,5 +1,5 @@
 use bitflags::bitflags;
-pub use osm_pbf_proto::osmformat::PrimitiveGroup as PbfPrimitiveGroup;
+use osm_pbf_proto::osmformat::PrimitiveGroup as PbfPrimitiveGroup;
 
 use super::{
     changeset::ChangeSet, node::Node, primitive_group::PrimitiveGroup, relation::Relation,

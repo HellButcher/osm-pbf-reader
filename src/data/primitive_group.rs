@@ -1,6 +1,6 @@
 use std::iter::FusedIterator;
 
-pub use osm_pbf_proto::osmformat::PrimitiveGroup as PbfPrimitiveGroup;
+use osm_pbf_proto::osmformat::PrimitiveGroup as PbfPrimitiveGroup;
 
 use super::PrimitiveBlock;
 
