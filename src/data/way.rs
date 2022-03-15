@@ -1,14 +1,15 @@
-use std::ops::Deref;
+use std::{array::IntoIter, iter::FusedIterator, ops::Deref};
 
 pub use osm_pbf_proto::osmformat::Way as PbfWay;
 
-use super::{tags::Tags, Meta};
+use super::{node::NodeId, tags::Tags, Meta};
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct WayId(pub i64);
 
 pub struct Way<'l> {
     pub id: WayId,
+    refs: &'l [i64],
 
     tags: Tags<'l>,
     meta: Meta,
@@ -27,12 +28,66 @@ impl<'l> Way<'l> {
     pub(crate) fn from_pbf(w: &'l PbfWay, strings: &'l [String]) -> Self {
         Self {
             id: WayId(w.id()),
+            refs: &w.refs,
             tags: Tags::new(strings, &w.keys, &w.vals),
             meta: Meta::from_info(&w.info),
         }
     }
 
+    #[inline(always)]
+    pub fn refs(&self) -> Refs<'l> {
+        Refs {
+            iter: self.refs.iter(),
+            current: 0,
+        }
+    }
+
+    #[inline]
     pub fn tags(&self) -> Tags<'l> {
         self.tags
     }
 }
+
+pub struct Refs<'l> {
+    iter: std::slice::Iter<'l, i64>,
+    current: i64,
+}
+
+impl<'l> IntoIterator for Way<'l> {
+    type Item = NodeId;
+    type IntoIter = Refs<'l>;
+    #[inline]
+    fn into_iter(self) -> Refs<'l> {
+        self.refs()
+    }
+}
+
+impl<'l> IntoIterator for &Way<'l> {
+    type Item = NodeId;
+    type IntoIter = Refs<'l>;
+    #[inline]
+    fn into_iter(self) -> Refs<'l> {
+        self.refs()
+    }
+}
+
+impl Iterator for Refs<'_> {
+    type Item = NodeId;
+    #[inline]
+    fn next(&mut self) -> Option<NodeId> {
+        self.current += self.iter.next()?;
+        Some(NodeId(self.current))
+    }
+
+    #[inline]
+    fn size_hint(&self) -> (usize, Option<usize>) {
+        self.iter.size_hint()
+    }
+
+    #[inline]
+    fn count(self) -> usize {
+        self.iter.count()
+    }
+}
+
+impl FusedIterator for Refs<'_> {}
