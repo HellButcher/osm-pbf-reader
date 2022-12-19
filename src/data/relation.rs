@@ -1,4 +1,4 @@
-use std::{ops::Deref, slice::Iter};
+use std::ops::Deref;
 
 use osm_pbf_proto::{
     osmformat::{relation::MemberType as PbfMemberType, Relation as PbfRelation},
@@ -53,9 +53,10 @@ impl<'l> Relation<'l> {
     pub fn members(&self) -> Members<'l> {
         Members {
             strings: self.strings,
-            roles: self.roles_sid.iter(),
-            member_ids: self.memids.iter(),
-            member_types: self.types.iter(),
+            i: 0,
+            roles: self.roles_sid,
+            member_ids: self.memids,
+            member_types: self.types,
         }
     }
 
@@ -74,9 +75,10 @@ pub enum Member<'l> {
 #[derive(Clone)]
 pub struct Members<'l> {
     strings: &'l [String],
-    roles: Iter<'l, i32>,
-    member_ids: Iter<'l, i64>,
-    member_types: Iter<'l, EnumOrUnknown<PbfMemberType>>,
+    i: usize,
+    roles: &'l [i32],
+    member_ids: &'l [i64],
+    member_types: &'l [EnumOrUnknown<PbfMemberType>],
 }
 
 impl<'l> IntoIterator for Relation<'l> {
@@ -102,9 +104,11 @@ impl<'l> Iterator for Members<'l> {
     #[inline]
     fn next(&mut self) -> Option<Member<'l>> {
         loop {
-            let role_str_id = self.roles.next().copied()? as usize;
-            let member_id = self.member_ids.next().copied()?;
-            let member_type = match self.member_types.next().copied()?.enum_value() {
+            let pos = self.i;
+            self.i += 1;
+            let role_str_id = *self.roles.get(pos)? as usize;
+            let member_id = *self.member_ids.get(pos)?;
+            let member_type = match self.member_types.get(pos)?.enum_value() {
                 Ok(member_type) => member_type,
                 Err(_) => continue,
             };
