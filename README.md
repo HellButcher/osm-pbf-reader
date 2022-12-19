@@ -3,7 +3,7 @@
 
 [![license: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](#license)
 [![Rust CI](https://github.com/HellButcher/osm-pbf-reader/actions/workflows/rust.yml/badge.svg)](https://github.com/HellButcher/osm-pbf-reader/actions/workflows/rust.yml)
-[![Crates.io](https://img.shields.io/crates/v/osm-pbf-reader.svg?label=osm-pbf-proto)](https://crates.io/crates/osm-pbf-reader)
+[![Crates.io](https://img.shields.io/crates/v/osm-pbf-reader.svg?label=osm-pbf-reader)](https://crates.io/crates/osm-pbf-reader)
 [![docs.rs](https://docs.rs/osm-pbf-reader/badge.svg)](https://docs.rs/osm-pbf-reader/)
 
 Fast OpenStreetMap PBF-File reader.
