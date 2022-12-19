@@ -46,7 +46,7 @@ pub trait Block: Sized {
 
     #[inline]
     fn parse_from_buffered_reader(reader: &mut dyn BufRead) -> Result<Self> {
-        let mut is = CodedInputStream::from_buffered_reader(reader);
+        let mut is = CodedInputStream::from_buf_read(reader);
         let msg = Self::Message::parse_from(&mut is)?;
         is.check_eof()?;
         let block = Self::from_message(msg)?;
@@ -136,17 +136,17 @@ impl<R: io::BufRead> Blobs<R> {
 
     pub fn header(&mut self) -> Result<OSMHeaderBlob> {
         match self.next_blob()? {
-            Some((header, blob)) if header.field_type() == "OSMHeader" => {
+            Some((header, blob)) if header.type_() == "OSMHeader" => {
                 Ok(OSMHeaderBlob::new(header, blob))
             }
-            Some((header, _)) => Err(Error::UnexpectedBlobType(header.field_type().to_string())),
+            Some((header, _)) => Err(Error::UnexpectedBlobType(header.type_().to_string())),
             None => Err(std::io::ErrorKind::UnexpectedEof.into()),
         }
     }
 
     fn read_msg_exact<M: Message>(&mut self, exact_size: usize) -> Result<M> {
         let mut input = self.0.by_ref().take(exact_size as u64);
-        let mut input = CodedInputStream::from_buffered_reader(&mut input);
+        let mut input = CodedInputStream::from_buf_read(&mut input);
         let msg = M::parse_from_reader(&mut input)?;
         input.check_eof()?;
         Ok(msg)
@@ -187,7 +187,7 @@ impl<R: io::BufRead> iter::Iterator for Blobs<R> {
                 Ok(None) => {
                     return None;
                 }
-                Ok(Some((header, blob))) if header.field_type() == "OSMData" => {
+                Ok(Some((header, blob))) if header.type_() == "OSMData" => {
                     return Some(Ok(OSMDataBlob::new(header, blob)));
                 }
                 // skip unsupported blobs and header-blobs

@@ -35,4 +35,4 @@ impl Block for HeaderBlock {
     }
 }
 
-pub type OSMHeaderBlob = crate::blob::Blob<PbfHeaderBlock>;
+pub type OSMHeaderBlob = crate::blob::Blob<HeaderBlock>;
