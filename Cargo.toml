@@ -1,6 +1,6 @@
 [package]
 name = "osm-pbf-reader"
-version = "0.1.0-alpha.3"
+version = "0.1.0-alpha.4"
 description = "OpenStreetMap PBF reader"
 authors = ["Christoph Hommelsheim <hellbutcher@gmx.de>"]
 license = "BSD-2-Clause"
