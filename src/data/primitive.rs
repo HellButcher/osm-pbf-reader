@@ -13,7 +13,7 @@ bitflags! {
         const RELATION = 4;
         const CHANGE_SET = 8;
 
-        const DEFAULT = Self::NODE.bits | Self::WAY.bits | Self::RELATION.bits;
+        const DEFAULT = Self::NODE.bits() | Self::WAY.bits() | Self::RELATION.bits();
     }
 }
 
