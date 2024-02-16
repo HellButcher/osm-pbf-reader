@@ -1,3 +1,4 @@
+use std::borrow::Cow;
 use std::slice::Iter;
 use std::{iter::FusedIterator, ops::Deref};
 
@@ -16,15 +17,15 @@ enum TagIterFields<'l> {
     Dense(Iter<'l, i32>),
 }
 
-pub struct Tags<'l> {
-    strings: &'l [String],
+pub struct TagsIter<'l> {
+    strings: &'l [Cow<'l, str>],
     iters: TagIterFields<'l>,
 }
 
 impl<'l> TagFields<'l> {
     #[inline]
-    pub fn iter_with_strings(self, strings: &'l [String]) -> Tags<'l> {
-        Tags {
+    pub fn iter_with_strings(self, strings: &'l [Cow<'_, str>]) -> TagsIter<'l> {
+        TagsIter {
             strings,
             iters: TagIterFields::Normal(self.0.iter(), self.1.iter()),
         }
@@ -33,8 +34,8 @@ impl<'l> TagFields<'l> {
 
 impl<'l> NodeTagFields<'l> {
     #[inline]
-    pub fn iter_with_strings(self, strings: &'l [String]) -> Tags<'l> {
-        Tags {
+    pub fn iter_with_strings(self, strings: &'l [Cow<'_, str>]) -> TagsIter<'l> {
+        TagsIter {
             strings,
             iters: match self {
                 NodeTagFields::Normal(keys, values) => {
@@ -46,7 +47,7 @@ impl<'l> NodeTagFields<'l> {
     }
 }
 
-impl<'l> Iterator for Tags<'l> {
+impl<'l> Iterator for TagsIter<'l> {
     type Item = (&'l str, &'l str);
     #[inline]
     fn next(&mut self) -> Option<Self::Item> {
@@ -89,4 +90,4 @@ impl<'l> Iterator for Tags<'l> {
         }
     }
 }
-impl<'l> FusedIterator for Tags<'l> {}
+impl<'l> FusedIterator for TagsIter<'l> {}

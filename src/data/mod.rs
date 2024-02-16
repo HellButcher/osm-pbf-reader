@@ -1,9 +1,12 @@
-use std::string::FromUtf8Error;
+use std::{borrow::Cow, str::Utf8Error};
 
-use crate::{blob::Block, error::Result};
+use crate::error::Result;
 
-use osm_pbf_proto::osmformat::{
-    Info as PbfInfo, PrimitiveBlock as PbfPrimitiveBlock, PrimitiveGroup as PbfPrimitiveGroup,
+use osm_pbf_proto::{
+    osmformat::{
+        Info as PbfInfo, PrimitiveBlock as PbfPrimitiveBlock, PrimitiveGroup as PbfPrimitiveGroup,
+    },
+    quick_protobuf as qpb,
 };
 
 pub mod changeset;
@@ -21,17 +24,15 @@ pub struct Meta {
 }
 
 impl Meta {
-    fn from_info(info: &PbfInfo) -> Self {
-        Self {
-            version: if info.has_version() {
-                info.version() as u32
-            } else {
-                0
+    fn from_info(info: Option<&PbfInfo>) -> Self {
+        match info {
+            Some(info) => Self {
+                version: info.version as u32,
+                visible: info.visible.unwrap_or(true),
             },
-            visible: if info.has_visible() {
-                info.visible()
-            } else {
-                true
+            None => Self {
+                version: 0,
+                visible: true,
             },
         }
     }
@@ -47,11 +48,11 @@ impl Default for Meta {
     }
 }
 
-#[derive(Copy, Clone)]
+#[derive(Copy, Clone, Default, Debug, PartialEq)]
 struct Offset {
-    lat: i64,
-    lon: i64,
-    granularity: i32,
+    pub lat: i64,
+    pub lon: i64,
+    pub granularity: i32,
 }
 
 #[derive(Copy, Clone, Default)]
@@ -62,35 +63,56 @@ struct DenseState {
     kv_pos: usize,
 }
 
-#[derive(Clone)]
-pub struct PrimitiveBlock {
-    strings: Vec<String>,
-    primitive_groups: Vec<PbfPrimitiveGroup>,
+#[derive(Debug, Default, PartialEq, Clone)]
+pub struct PrimitiveBlock<'a> {
+    pub strings: Vec<Cow<'a, str>>,
+    pub primitive_groups: Vec<PbfPrimitiveGroup>,
     offset: Offset,
 }
 
-impl Block for PrimitiveBlock {
-    type Message = PbfPrimitiveBlock;
+impl<'a> qpb::MessageRead<'a> for PrimitiveBlock<'a> {
+    fn from_reader(r: &mut qpb::BytesReader, bytes: &'a [u8]) -> qpb::Result<Self> {
+        let msg = PbfPrimitiveBlock::from_reader(r, bytes)?;
+        let msg = PrimitiveBlock::try_from(msg)?;
+        Ok(msg)
+    }
+}
 
-    #[inline]
-    fn from_message(mut pbf: PbfPrimitiveBlock) -> Result<Self> {
-        let strings = if let Some(st) = pbf.stringtable.take() {
-            st.s.into_iter()
-                .map(String::from_utf8)
-                .collect::<Result<Vec<String>, FromUtf8Error>>()?
-        } else {
-            Vec::new()
-        };
+fn cow_bytes_to_str<'a>(b: Cow<'a, [u8]>) -> Result<Cow<'a, str>, Utf8Error> {
+    match b {
+        Cow::Borrowed(b) => Ok(Cow::Borrowed(std::str::from_utf8(b)?)),
+        Cow::Owned(b) => Ok(Cow::Owned(
+            String::from_utf8(b).map_err(|e| e.utf8_error())?,
+        )),
+    }
+}
+
+impl<'a> TryFrom<PbfPrimitiveBlock<'a>> for PrimitiveBlock<'a> {
+    type Error = Utf8Error;
+    fn try_from(pbf: PbfPrimitiveBlock<'a>) -> Result<Self, Utf8Error> {
+        let strings: Vec<_> = pbf
+            .stringtable
+            .s
+            .into_iter()
+            .map(cow_bytes_to_str)
+            .collect::<Result<_, _>>()?;
         Ok(Self {
             strings,
-            offset: Offset {
-                lat: pbf.lat_offset(),
-                lon: pbf.lon_offset(),
-                granularity: pbf.granularity(),
-            },
             primitive_groups: pbf.primitivegroup,
+            offset: Offset {
+                lat: pbf.lat_offset,
+                lon: pbf.lon_offset,
+                granularity: pbf.granularity,
+            },
         })
     }
 }
 
-pub type OSMDataBlob = crate::blob::Blob<PrimitiveBlock>;
+#[doc(hidden)]
+pub struct DataBlobMarker;
+
+impl crate::blob::Block for DataBlobMarker {
+    type Target<'a> = PrimitiveBlock<'a>;
+}
+
+pub type OSMDataBlob = crate::blob::Blob<DataBlobMarker>;

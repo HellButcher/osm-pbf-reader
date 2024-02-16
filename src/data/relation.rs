@@ -1,13 +1,12 @@
-use std::ops::Deref;
+use std::{borrow::Cow, ops::Deref};
 
-use osm_pbf_proto::{
-    osmformat::{relation::MemberType as PbfMemberType, Relation as PbfRelation},
-    protobuf::EnumOrUnknown,
+use osm_pbf_proto::osmformat::{
+    mod_Relation::MemberType as PbfMemberType, Relation as PbfRelation,
 };
 
 use super::{
     node::NodeId,
-    tags::{TagFields, Tags},
+    tags::{TagFields, TagsIter},
     way::WayId,
     Meta,
 };
@@ -18,11 +17,11 @@ pub struct RelationId(pub i64);
 pub struct Relation<'l> {
     pub id: RelationId,
 
-    strings: &'l [String],
+    strings: &'l [Cow<'l, str>],
 
     roles_sid: &'l [i32],
     memids: &'l [i64],
-    types: &'l [EnumOrUnknown<PbfMemberType>],
+    types: &'l [PbfMemberType],
 
     tags: TagFields<'l>,
     meta: Meta,
@@ -38,20 +37,20 @@ impl Deref for Relation<'_> {
 
 impl<'l> Relation<'l> {
     #[inline]
-    pub(crate) fn from_pbf(r: &'l PbfRelation, strings: &'l [String]) -> Self {
+    pub(crate) fn from_pbf(r: &'l PbfRelation, strings: &'l [Cow<'_, str>]) -> Self {
         Self {
-            id: RelationId(r.id()),
+            id: RelationId(r.id),
             strings,
             roles_sid: &r.roles_sid,
             memids: &r.memids,
             types: &r.types,
             tags: TagFields(&r.keys, &r.vals),
-            meta: Meta::from_info(&r.info),
+            meta: Meta::from_info(r.info.as_ref()),
         }
     }
 
-    pub fn members(&self) -> Members<'l> {
-        Members {
+    pub fn members(&self) -> MembersIter<'l> {
+        MembersIter {
             strings: self.strings,
             i: 0,
             roles: self.roles_sid,
@@ -61,7 +60,7 @@ impl<'l> Relation<'l> {
     }
 
     #[inline]
-    pub fn tags(&self) -> Tags<'l> {
+    pub fn tags(&self) -> TagsIter<'l> {
         self.tags.iter_with_strings(self.strings)
     }
 }
@@ -73,33 +72,33 @@ pub enum Member<'l> {
 }
 
 #[derive(Clone)]
-pub struct Members<'l> {
-    strings: &'l [String],
+pub struct MembersIter<'l> {
+    strings: &'l [Cow<'l, str>],
     i: usize,
     roles: &'l [i32],
     member_ids: &'l [i64],
-    member_types: &'l [EnumOrUnknown<PbfMemberType>],
+    member_types: &'l [PbfMemberType],
 }
 
 impl<'l> IntoIterator for Relation<'l> {
     type Item = Member<'l>;
-    type IntoIter = Members<'l>;
+    type IntoIter = MembersIter<'l>;
     #[inline(always)]
-    fn into_iter(self) -> Members<'l> {
+    fn into_iter(self) -> MembersIter<'l> {
         self.members()
     }
 }
 
 impl<'l> IntoIterator for &Relation<'l> {
     type Item = Member<'l>;
-    type IntoIter = Members<'l>;
+    type IntoIter = MembersIter<'l>;
     #[inline(always)]
-    fn into_iter(self) -> Members<'l> {
+    fn into_iter(self) -> MembersIter<'l> {
         self.members()
     }
 }
 
-impl<'l> Iterator for Members<'l> {
+impl<'l> Iterator for MembersIter<'l> {
     type Item = Member<'l>;
     #[inline]
     fn next(&mut self) -> Option<Member<'l>> {
@@ -108,10 +107,7 @@ impl<'l> Iterator for Members<'l> {
             self.i += 1;
             let role_str_id = *self.roles.get(pos)? as usize;
             let member_id = *self.member_ids.get(pos)?;
-            let member_type = match self.member_types.get(pos)?.enum_value() {
-                Ok(member_type) => member_type,
-                Err(_) => continue,
-            };
+            let member_type = self.member_types.get(pos)?;
             let role_str = self
                 .strings
                 .get(role_str_id)

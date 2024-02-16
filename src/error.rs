@@ -2,6 +2,8 @@ use std::string::FromUtf8Error;
 
 use thiserror::Error;
 
+use crate::blob::BlobType;
+
 #[derive(Debug, Error)]
 #[non_exhaustive]
 pub enum Error {
@@ -9,7 +11,7 @@ pub enum Error {
     IoError(#[from] std::io::Error),
 
     #[error(transparent)]
-    ProtobufError(#[from] osm_pbf_proto::protobuf::Error),
+    ProtobufError(#[from] osm_pbf_proto::quick_protobuf::Error),
 
     #[error(transparent)]
     Utf8Error(#[from] FromUtf8Error),
@@ -28,7 +30,7 @@ pub enum Error {
     UnsupportedEncoding,
 
     #[error("Unexpected Blob-Type {0}")]
-    UnexpectedBlobType(String),
+    UnexpectedBlobType(BlobType),
 }
 
 pub type Result<T, E = Error> = std::result::Result<T, E>;

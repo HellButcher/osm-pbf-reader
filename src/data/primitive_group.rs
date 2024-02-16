@@ -6,22 +6,22 @@ use super::PrimitiveBlock;
 
 #[non_exhaustive]
 pub struct PrimitiveGroup<'l> {
-    pub(super) block: &'l PrimitiveBlock,
+    pub(super) block: &'l PrimitiveBlock<'l>,
     pub(super) group: &'l PbfPrimitiveGroup,
 }
 
-pub struct PrimitiveGroups<'l> {
-    block: &'l PrimitiveBlock,
+pub struct PrimitiveGroupsIter<'l> {
+    block: &'l PrimitiveBlock<'l>,
     pos: usize,
 }
 
-impl PrimitiveBlock {
+impl<'l> PrimitiveBlock<'l> {
     #[inline(always)]
-    pub fn iter(&self) -> PrimitiveGroups<'_> {
+    pub fn iter(&self) -> PrimitiveGroupsIter<'_> {
         self.primitive_groups()
     }
-    pub fn primitive_groups(&self) -> PrimitiveGroups<'_> {
-        PrimitiveGroups {
+    pub fn primitive_groups(&self) -> PrimitiveGroupsIter<'_> {
+        PrimitiveGroupsIter {
             block: self,
             pos: 0,
         }
@@ -42,7 +42,7 @@ impl PrimitiveBlock {
     }
 }
 
-impl<'l> Iterator for PrimitiveGroups<'l> {
+impl<'l> Iterator for PrimitiveGroupsIter<'l> {
     type Item = PrimitiveGroup<'l>;
     fn next(&mut self) -> Option<Self::Item> {
         let group = self.block.get_primitive_group(self.pos)?;
@@ -75,14 +75,14 @@ impl<'l> Iterator for PrimitiveGroups<'l> {
     }
 }
 
-impl FusedIterator for PrimitiveGroups<'_> {}
+impl FusedIterator for PrimitiveGroupsIter<'_> {}
 
-impl<'l> IntoIterator for &'l PrimitiveBlock {
+impl<'l> IntoIterator for &'l PrimitiveBlock<'_> {
     type Item = PrimitiveGroup<'l>;
-    type IntoIter = PrimitiveGroups<'l>;
+    type IntoIter = PrimitiveGroupsIter<'l>;
 
     #[inline(always)]
-    fn into_iter(self) -> PrimitiveGroups<'l> {
+    fn into_iter(self) -> PrimitiveGroupsIter<'l> {
         self.primitive_groups()
     }
 }

@@ -1,10 +1,18 @@
 use byteorder::{BigEndian, ReadBytesExt};
-pub use osm_pbf_proto::fileformat::{Blob as PbfBlob, BlobHeader as PbfBlobHeader};
-use osm_pbf_proto::protobuf::{CodedInputStream, Message};
-use std::io::{self, BufRead, Read};
-use std::iter;
-use std::marker::PhantomData;
-use std::ops::Deref;
+use crossbeam_queue::ArrayQueue;
+use osm_pbf_proto::quick_protobuf::BytesReader;
+pub use osm_pbf_proto::{
+    fileformat::{
+        mod_Blob::OneOfdata as PbfBlobData, Blob as PbfBlob, BlobHeader as PbfBlobHeader,
+    },
+    quick_protobuf::{self as qpb, MessageRead},
+};
+use std::{fmt, marker::PhantomData};
+use std::{
+    io::{self, Read},
+    sync::Arc,
+};
+use std::{iter, pin::Pin};
 
 use crate::data::OSMDataBlob;
 use crate::error::{Error, Result};
@@ -13,147 +21,223 @@ use crate::header::OSMHeaderBlob;
 const MAX_HEADER_SIZE: u32 = 64 * 1024;
 const MAX_UNCOMPRESSED_DATA_SIZE: usize = 32 * 1024 * 1024;
 
-pub struct Blob<M> {
-    header: PbfBlobHeader,
-    blob: PbfBlob,
-    phantom: PhantomData<M>,
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum BlobType {
+    OSMHeader,
+    OSMData,
+    Other(String),
 }
 
-impl<M> Blob<M> {
-    #[inline]
-    const fn new(header: PbfBlobHeader, blob: PbfBlob) -> Self {
-        Blob {
-            header,
-            blob,
-            phantom: PhantomData,
+impl BlobType {
+    fn from_str(s: &str) -> Self {
+        match s {
+            "OSMHeader" => Self::OSMHeader,
+            "OSMData" => Self::OSMData,
+            other => Self::Other(other.to_string()),
+        }
+    }
+    fn as_str(&self) -> &str {
+        match self {
+            Self::OSMHeader => "OSMHeader",
+            Self::OSMData => "OSMData",
+            Self::Other(ref s) => s,
         }
     }
 }
 
-pub trait Block: Sized {
-    type Message: Message;
-
-    fn from_message(pbf: Self::Message) -> Result<Self>;
-
-    #[inline]
-    fn parse_from_reader(reader: &mut dyn Read) -> Result<Self> {
-        let mut is = CodedInputStream::new(reader);
-        let msg = Self::Message::parse_from(&mut is)?;
-        is.check_eof()?;
-        let block = Self::from_message(msg)?;
-        Ok(block)
-    }
-
-    #[inline]
-    fn parse_from_buffered_reader(reader: &mut dyn BufRead) -> Result<Self> {
-        let mut is = CodedInputStream::from_buf_read(reader);
-        let msg = Self::Message::parse_from(&mut is)?;
-        is.check_eof()?;
-        let block = Self::from_message(msg)?;
-        Ok(block)
-    }
-
-    #[inline]
-    fn parse_from_bytes(bytes: &[u8]) -> Result<Self> {
-        let mut is = CodedInputStream::from_bytes(bytes);
-        let msg = Self::Message::parse_from(&mut is)?;
-        is.check_eof()?;
-        let block = Self::from_message(msg)?;
-        Ok(block)
-    }
-
-    #[inline]
-    fn parse_from(is: &mut CodedInputStream) -> Result<Self> {
-        let msg = Self::Message::parse_from(is)?;
-        let block = Self::from_message(msg)?;
-        Ok(block)
+impl fmt::Display for BlobType {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}", self.as_str())
     }
 }
 
-impl<M: Block> Blob<M> {
-    pub fn decode(&self) -> Result<M> {
-        if self.blob.has_raw() {
-            Ok(M::parse_from_bytes(self.blob.raw())?)
-        } else if cfg!(feature = "zlib") && self.blob.has_zlib_data() {
-            let cursor = io::Cursor::new(self.blob.zlib_data());
-            let mut decoder = flate2::bufread::ZlibDecoder::new(cursor);
-            Ok(M::parse_from_reader(&mut decoder)?)
-        } else if cfg!(feature = "lzma") && self.blob.has_lzma_data() {
-            let cursor = io::Cursor::new(self.blob.lzma_data());
-            let mut decoder = xz2::bufread::XzDecoder::new(cursor);
-            Ok(M::parse_from_reader(&mut decoder)?)
+struct BlobData {
+    blob: PbfBlob<'static>,
+    data: Pin<Vec<u8>>,
+    pool: Pool,
+}
+
+impl BlobData {
+    fn new(data: Vec<u8>, pool: Pool) -> Result<Self> {
+        let data = Pin::new(data);
+        let data_slice: &[u8] = data.as_ref().get_ref();
+        let static_data_slice: &'static [u8] = unsafe { std::mem::transmute(data_slice) };
+        let mut reader = BytesReader::from_bytes(static_data_slice);
+        let blob = PbfBlob::from_reader(&mut reader, static_data_slice)?;
+        Ok(Self { blob, data, pool })
+    }
+
+    fn set_raw(&mut self, data: Vec<u8>) -> &[u8] {
+        let data = Pin::new(data);
+        let data_slice: &[u8] = data.as_ref().get_ref();
+        let static_data_slice: &'static [u8] = unsafe { std::mem::transmute(data_slice) };
+        self.blob = PbfBlob {
+            raw_size: None,
+            data: PbfBlobData::raw(std::borrow::Cow::Borrowed(&static_data_slice)),
+        };
+        let old_data = Pin::into_inner(std::mem::replace(&mut self.data, data));
+        self.pool.push(old_data);
+        static_data_slice
+    }
+
+    fn new_buf_with_raw_size(&self) -> Vec<u8> {
+        let mut buf = self.pool.get();
+        if let Some(s) = self.blob.raw_size {
+            if s > 0 {
+                buf.reserve_exact(s as usize);
+            }
+        }
+        buf
+    }
+
+    pub fn decode(&mut self) -> Result<&[u8]> {
+        match self.blob.data {
+            PbfBlobData::None => Ok(&[]),
+            PbfBlobData::raw(ref d) => Ok(d),
+            #[cfg(feature = "zlib")]
+            PbfBlobData::zlib_data(ref d) => {
+                let cursor = io::Cursor::new(d);
+                let mut decoder = flate2::bufread::ZlibDecoder::new(cursor);
+                let mut buf = self.new_buf_with_raw_size();
+                decoder.read_to_end(&mut buf)?;
+                Ok(self.set_raw(buf))
+            }
+            #[cfg(feature = "lzma")]
+            PbfBlobData::lzma_data(ref d) => {
+                let cursor = io::Cursor::new(d);
+                let mut decoder = xz2::bufread::XzDecoder::new(cursor);
+                let mut buf = self.new_buf_with_raw_size();
+                decoder.read_to_end(&mut buf)?;
+                Ok(self.set_raw(buf))
+            }
+            _ => Err(Error::UnsupportedEncoding),
+        }
+    }
+}
+
+impl Drop for BlobData {
+    fn drop(&mut self) {
+        let buf = Pin::into_inner(std::mem::replace(&mut self.data, Pin::new(Vec::new())));
+        self.pool.push(buf);
+    }
+}
+
+pub struct Blob<B> {
+    data: BlobData,
+    phantom: PhantomData<fn(B)>,
+}
+
+impl<B: Block> Blob<B> {
+    #[inline]
+    pub fn read(&mut self) -> Result<B::Target<'_>> {
+        let data = self.data.decode()?;
+        let mut reader = BytesReader::from_bytes(&data);
+        let msg = B::Target::from_reader(&mut reader, &data)?;
+        Ok(msg)
+    }
+}
+
+pub trait Block {
+    type Target<'a>: MessageRead<'a>;
+}
+
+#[derive(Clone)]
+struct Pool(Arc<ArrayQueue<Vec<u8>>>);
+
+impl Pool {
+    fn new() -> Pool {
+        Self(Arc::new(ArrayQueue::new(32)))
+    }
+    fn get(&self) -> Vec<u8> {
+        if let Some(mut buf) = self.0.pop() {
+            buf.clear();
+            buf
         } else {
-            Err(Error::UnsupportedEncoding)
+            Vec::new()
+        }
+    }
+    fn push(&self, buf: Vec<u8>) {
+        if buf.capacity() > 0 {
+            let _ = self.0.push(buf);
         }
     }
 }
 
-impl<M> Deref for Blob<M> {
-    type Target = PbfBlobHeader;
-    #[inline]
-    fn deref(&self) -> &PbfBlobHeader {
-        &self.header
-    }
+pub struct Blobs<R> {
+    reader: R,
+    hdr_buf: Vec<u8>,
+    pool: Pool,
 }
-
-#[derive(Debug)]
-pub struct Blobs<R>(R);
 
 impl<R> Blobs<R> {
     #[inline]
     pub fn into_inner(self) -> R {
-        self.0
+        self.reader
     }
 }
 
 impl<R: AsRef<[u8]>> Blobs<io::Cursor<R>> {
     #[inline]
     pub fn from_bytes(bytes: R) -> Self {
-        Self(io::Cursor::new(bytes))
-    }
-}
-
-impl<R: io::Read> Blobs<io::BufReader<R>> {
-    #[inline]
-    pub fn from_read(read: R) -> Self {
-        Self(io::BufReader::new(read))
+        Self {
+            reader: io::Cursor::new(bytes),
+            hdr_buf: Vec::new(),
+            pool: Pool::new(),
+        }
     }
 }
 
 impl<R: io::Seek> Blobs<R> {
     #[inline]
     pub fn rewind(&mut self) -> io::Result<()> {
-        self.0.rewind()?;
+        self.reader.rewind()?;
         Ok(())
     }
 }
 
-impl<R: io::BufRead> Blobs<R> {
+fn read_bytes_exact<R: io::Read>(
+    reader: &mut R,
+    bytes: &mut Vec<u8>,
+    exact_size: usize,
+) -> Result<()> {
+    bytes.reserve(exact_size);
+    let len = reader.take(exact_size as u64).read_to_end(bytes)?;
+    if len != exact_size {
+        Err(io::ErrorKind::UnexpectedEof.into())
+    } else {
+        Ok(())
+    }
+}
+
+impl<R: io::Read> Blobs<R> {
     #[inline]
-    pub fn from_buf_read(read: R) -> Self {
-        Self(read)
+    pub fn from_read(reader: R) -> Self {
+        Self {
+            reader,
+            hdr_buf: Vec::new(),
+            pool: Pool::new(),
+        }
     }
 
     pub fn header(&mut self) -> Result<OSMHeaderBlob> {
         match self.next_blob()? {
-            Some((header, blob)) if header.type_() == "OSMHeader" => {
-                Ok(OSMHeaderBlob::new(header, blob))
-            }
-            Some((header, _)) => Err(Error::UnexpectedBlobType(header.type_().to_string())),
+            Some((BlobType::OSMHeader, data)) => Ok(Blob {
+                data,
+                phantom: PhantomData,
+            }),
+            Some((blob_type, _)) => Err(Error::UnexpectedBlobType(blob_type)),
             None => Err(std::io::ErrorKind::UnexpectedEof.into()),
         }
     }
 
-    fn read_msg_exact<M: Message>(&mut self, exact_size: usize) -> Result<M> {
-        let mut input = self.0.by_ref().take(exact_size as u64);
-        let mut input = CodedInputStream::from_buf_read(&mut input);
-        let msg = M::parse_from_reader(&mut input)?;
-        input.check_eof()?;
-        Ok(msg)
+    fn read_bytes_exact(&mut self, exact_size: usize) -> Result<Vec<u8>> {
+        let mut bytes = self.pool.get();
+        read_bytes_exact(&mut self.reader, &mut bytes, exact_size)?;
+        Ok(bytes)
     }
 
-    fn next_blob(&mut self) -> Result<Option<(PbfBlobHeader, PbfBlob)>> {
-        let header_size = match self.0.read_u32::<BigEndian>() {
+    fn next_blob(&mut self) -> Result<Option<(BlobType, BlobData)>> {
+        let header_size = match self.reader.read_u32::<BigEndian>() {
             Err(e) if e.kind() == io::ErrorKind::UnexpectedEof => {
                 return Ok(None); // Expected EOF
             }
@@ -163,22 +247,32 @@ impl<R: io::BufRead> Blobs<R> {
             }
             Ok(header_size) => header_size as usize,
         };
+        self.hdr_buf.clear();
+        read_bytes_exact(&mut self.reader, &mut self.hdr_buf, header_size)?;
 
-        let header: PbfBlobHeader = self.read_msg_exact(header_size)?;
-        let data_size = header.datasize() as usize;
+        let mut reader = BytesReader::from_bytes(&self.hdr_buf);
+        let header = PbfBlobHeader::from_reader(&mut reader, &self.hdr_buf)?;
+
+        let blob_type = BlobType::from_str(&header.type_pb);
+        if matches!(blob_type, BlobType::Other(_)) {
+            return Err(Error::UnexpectedBlobType(blob_type));
+        };
+
+        let data_size = header.datasize as usize;
         if data_size > MAX_UNCOMPRESSED_DATA_SIZE {
             return Err(Error::BlobDataToLarge);
         }
 
-        let blob: PbfBlob = self.read_msg_exact(data_size)?;
-        Ok(Some((header, blob)))
+        let data = self.read_bytes_exact(data_size)?;
+
+        Ok(Some((blob_type, BlobData::new(data, self.pool.clone())?)))
     }
 }
 
-impl<R: io::BufRead> iter::Iterator for Blobs<R> {
+impl<R: io::Read> iter::Iterator for Blobs<R> {
     type Item = Result<OSMDataBlob>;
 
-    fn next(&mut self) -> Option<Result<OSMDataBlob>> {
+    fn next(&mut self) -> Option<Self::Item> {
         loop {
             match self.next_blob() {
                 Err(e) => {
@@ -187,8 +281,11 @@ impl<R: io::BufRead> iter::Iterator for Blobs<R> {
                 Ok(None) => {
                     return None;
                 }
-                Ok(Some((header, blob))) if header.type_() == "OSMData" => {
-                    return Some(Ok(OSMDataBlob::new(header, blob)));
+                Ok(Some((BlobType::OSMData, data))) => {
+                    return Some(Ok(Blob {
+                        data,
+                        phantom: PhantomData,
+                    }));
                 }
                 // skip unsupported blobs and header-blobs
                 _ => {}

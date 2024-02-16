@@ -1,9 +1,10 @@
-use std::ops::Deref;
+use core::str;
+use std::{borrow::Cow, ops::Deref};
 
 use osm_pbf_proto::osmformat::Node as PbfNode;
 
 use super::{
-    tags::{NodeTagFields, Tags},
+    tags::{NodeTagFields, TagsIter},
     DenseState, Meta,
 };
 
@@ -17,7 +18,7 @@ pub struct Node<'l> {
     /// Longitude in nanodegrees
     pub nano_lon: i64,
 
-    strings: &'l [String],
+    strings: &'l [Cow<'l, str>],
     tags: NodeTagFields<'l>,
     meta: Meta,
 }
@@ -32,14 +33,18 @@ impl Deref for Node<'_> {
 
 impl<'l> Node<'l> {
     #[inline]
-    pub(super) fn from_pbf(n: &'l PbfNode, offset: &super::Offset, strings: &'l [String]) -> Self {
+    pub(super) fn from_pbf(
+        n: &'l PbfNode,
+        offset: &super::Offset,
+        strings: &'l [Cow<'_, str>],
+    ) -> Self {
         Self {
-            id: NodeId(n.id()),
+            id: NodeId(n.id),
             strings,
-            nano_lat: offset.lat + n.lat() * offset.granularity as i64,
-            nano_lon: offset.lon + n.lon() * offset.granularity as i64,
+            nano_lat: offset.lat + n.lat * offset.granularity as i64,
+            nano_lon: offset.lon + n.lon * offset.granularity as i64,
             tags: NodeTagFields::Normal(&n.keys, &n.vals),
-            meta: Meta::from_info(&n.info),
+            meta: Meta::from_info(n.info.as_ref()),
         }
     }
 
@@ -50,7 +55,7 @@ impl<'l> Node<'l> {
         visible: bool,
         offset: &super::Offset,
         key_values: &'l [i32],
-        strings: &'l [String],
+        strings: &'l [Cow<'_, str>],
     ) -> Self {
         Self {
             id: NodeId(d.id),
@@ -73,7 +78,7 @@ impl<'l> Node<'l> {
         self.nano_lon as f64 * 1e-9
     }
 
-    pub fn tags(&self) -> Tags<'l> {
+    pub fn tags(&self) -> TagsIter<'l> {
         self.tags.iter_with_strings(self.strings)
     }
 }
